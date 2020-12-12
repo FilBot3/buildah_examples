@@ -23,23 +23,26 @@ step "Pull the container: ${container_from}"
 container_base=$(buildah from "${container_from}")
 
 step "Perform a full upgrade"
-buildah run "${container_base}" -- dnf update -y --refresh
+buildah run "${container_base}" -- /usr/bin/dnf update -y --refresh
 
 step "Install Development Tools"
-buildah run "${container_base}" -- dnf groupinstall -y "Development Tools"
+buildah run "${container_base}" -- /usr/bin/dnf groupinstall -y "Development Tools"
 
 step "Install packages for vim anc coc.nvim"
-buildah run "${container_base}" -- dnf install -y \
+buildah run "${container_base}" -- /usr/bin/dnf install -y \
+    git \
     nodejs \
     yarnpkg \
     ruby \
     python3 \
     python3-devel \
-    vim
+    vim \
+    libcanberra-gtk3 \
+    PackageKit-gtk3-module
 
 step "Add the Kubernetes repo."
 #buildah add --chown root:root "${container_base}" kubernetes_kubectl.repo /etc/yum.repos.d/kubernetes.repo
-buildah run "${container_base}" -- sh -c "cat <<EOF > /etc/yum.repos.d/kubernetes.repo
+buildah run "${container_base}" -- /bin/sh -c "cat <<EOF > /etc/yum.repos.d/kubernetes.repo
 [kubernetes]
 name=Kubernetes
 baseurl=https://packages.cloud.google.com/yum/repos/kubernetes-el7-x86_64
@@ -50,19 +53,25 @@ gpgkey=https://packages.cloud.google.com/yum/doc/yum-key.gpg https://packages.cl
 EOF"
 
 step "Install kubectl"
-buildah run "${container_base}" -- dnf install -y kubectl
+buildah run "${container_base}" -- /usr/bin/dnf install -y kubectl
 
 step "Configure the Terraform repo"
-buildah run "${container_base}" -- dnf config-manager --add-repo https://rpm.releases.hashicorp.com/fedora/hashicorp.repo
+buildah run "${container_base}" -- /usr/bin/dnf config-manager --add-repo https://rpm.releases.hashicorp.com/fedora/hashicorp.repo
 
 step "Install Terraform"
-buildah run "${container_base}" -- dnf install -y terraform
+buildah run "${container_base}" -- /usr/bin/dnf install -y terraform
 
 step "Install Helm"
-buildah run "${container_base}" -- sh -c "curl https://raw.githubusercontent.com/helm/helm/master/scripts/get-helm-3 | bash"
+buildah run "${container_base}" -- /bin/sh -c "curl https://raw.githubusercontent.com/helm/helm/master/scripts/get-helm-3 | bash"
 
-step "Create non-root user"
-buildah run "${container_base}" -- useradd -g wheel filbot
+step "create non-root user"
+buildah run "${container_base}" -- /usr/sbin/groupadd filbot
+buildah run "${container_base}" -- /usr/sbin/useradd -g filbot filbot
+
+step "Setup internal user as sudoer"
+buildah run "${container_base}" -- /bin/sh -c "cat <<EOF > /etc/sudoers.d/filbot
+filbot ALL=(ALL) NOPASSWD:ALL
+EOF"
 
 step "Setting default user"
 buildah config --user "filbot" "${container_base}"
@@ -70,11 +79,17 @@ buildah config --user "filbot" "${container_base}"
 step "Setting the working directory"
 buildah config --workingdir "/home/filbot" "${container_base}"
 
-step "Setting the entrypoint"
-buildah config --entrypoint '["/bin/bash"]' "${container_base}"
+step "Install Vim Plugins"
+buildah copy --chown filbot:filbot "${container_base}" vim_setup.sh /home/filbot
+buildah copy --chown filbot:filbot "${container_base}" vimrc /home/filbot
+buildah run "${container_base}" -- /bin/bash /home/filbot/vim_setup.sh
+buildah copy --chown filbot:filbot "${container_base}" ftplugin /home/filbot/.vim
+
+#step "Setting the entrypoint"
+#buildah config --entrypoint '["/bin/bash"]' "${container_base}"
 
 step "Setting the runtime command"
-buildah config --cmd '["--login"]' "${container_base}"
+buildah config --cmd '["/bin/sh"]' "${container_base}"
 
 step "Committing the container to Podman"
 buildah commit --rm "${container_base}" filbox
